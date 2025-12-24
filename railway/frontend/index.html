@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>EcoRail Calculator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    #map { height: 420px; border-radius: 16px; }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+  <div id="app" class="p-6 max-w-7xl mx-auto">
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+      <!-- Карта -->
+      <div class="lg:col-span-2 bg-white rounded-2xl p-4 shadow">
+        <div id="map"></div>
+      </div>
+
+      <!-- Панель управления -->
+      <div class="bg-white rounded-2xl p-6 shadow flex flex-col gap-4">
+        <!-- Маршрут -->
+        <div>
+          <label class="text-sm text-gray-500 mb-1 block">Маршрут</label>
+          <select
+            v-model="selectedRouteId"
+            class="w-full border rounded-xl px-4 py-3 focus:ring-2 focus:ring-green-400"
+          >
+            <option disabled value="">Выберите маршрут</option>
+            <option value="1">Брест-Достык</option>
+            <option value="2">Достык-Брест</option>
+            <option value="3">Брест-Алтынколь</option>
+            <option value="4">Алтынколь-Брест</option>
+          </select>
+        </div>
+
+        <!-- Масса -->
+        <div>
+          <label class="text-sm text-gray-500 mb-1 block">Масса груза (т)</label>
+          <input
+            type="number"
+            min="1"
+            step="0.1"
+            v-model.number="weight"
+            placeholder="20"
+            class="w-full border rounded-xl px-4 py-3 focus:ring-2 focus:ring-green-400"
+          />
+        </div>
+
+        <!-- Контейнер -->
+        <div class="flex gap-2">
+          <button
+            @click="container = 'dfe'"
+            :class="container === 'dfe' ? activeBtn : baseBtn"
+          >ДФЭ</button>
+          <button
+            @click="container = 'sfe'"
+            :class="container === 'sfe' ? activeBtn : baseBtn"
+          >СФЭ</button>
+        </div>
+
+        <!-- Кнопка -->
+        <button
+          @click="calculate"
+          :disabled="!canCalculate"
+          class="mt-auto bg-green-500 hover:bg-green-600 disabled:opacity-50 text-white py-3 rounded-xl font-semibold"
+        >
+          Рассчитать
+        </button>
+      </div>
+    </div>
+
+    <!-- Результаты — занимает всю ширину -->
+    <div class="bg-green-400 rounded-2xl p-8 text-white">
+      <div class="text-lg opacity-90 mb-2">Ваша экологическая экономия</div>
+      <div class="text-5xl font-bold mb-2">{{ savings }} кг CO₂</div>
+      <div class="text-xl">Это как посадить <b>{{ trees }}</b> деревьев!</div>
+    </div>
+  </div>
+
+<script>
+  const { createApp, ref, computed, onMounted, nextTick } = Vue;
+
+  createApp({
+    setup() {
+      const selectedRouteId = ref('');
+      const weight = ref(null);
+      const container = ref('dfe');
+
+      const savings = ref(0);
+      const trees = ref(0);
+
+      const map = ref(null);
+      const routeLine = ref(null);
+
+      const routesData = ref({ routes: {} });
+
+      const baseBtn = 'flex-1 border rounded-xl py-3';
+      const activeBtn = 'flex-1 border rounded-xl py-3 bg-green-100 border-green-500 text-green-700';
+
+      const API_BASE = 'http://localhost:8000';
+
+      //  можно считать, если выбран маршрут и масса
+      const canCalculate = computed(() => {
+        return selectedRouteId.value && weight.value > 0;
+      });
+
+      // =====================================================
+      // ЗАГРУЗКА МАРШРУТОВ + ИНИЦИАЛИЗАЦИЯ КАРТЫ
+      // =====================================================
+      onMounted(async () => {
+        try {
+          const res = await fetch(`${API_BASE}/api/routes`);
+          routesData.value = await res.json();
+        } catch (err) {
+          alert(" Не удалось загрузить маршруты");
+          return;
+        }
+
+        nextTick(() => {
+          map.value = L.map('map').setView([55, 60], 4);
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: ''
+          }).addTo(map.value);
+          document.querySelector('.leaflet-control-attribution').innerHTML = '';
+        });
+      });
+
+      // =====================================================
+      // РАСЧЁТ (ВСЁ ДЕЛАЕТ БЭКЕНД)
+      // =====================================================
+      async function calculate() {
+        const res = await fetch(`${API_BASE}/api/calculate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            route_id: selectedRouteId.value,
+            weight_tons: weight.value,
+            container: container.value
+          })
+        });
+
+        if (!res.ok) {
+          alert(" Ошибка расчёта");
+          return;
+        }
+
+        const data = await res.json();
+
+        savings.value = data.saved_kg;
+        trees.value = data.trees;
+
+        // ===== КАРТА =====
+        if (routeLine.value) {
+          map.value.removeLayer(routeLine.value);
+        }
+
+        routeLine.value = L.polyline(data.coords, {
+          color: 'green',
+          weight: 4
+        }).addTo(map.value);
+
+        map.value.fitBounds(routeLine.value.getBounds(), { padding: [40, 40] });
+      }
+      
+
+      return {
+        selectedRouteId,
+        weight,
+        container,
+        savings,
+        trees,
+        map,
+        routeLine,
+        routesData,
+        baseBtn,
+        activeBtn,
+        canCalculate,
+        calculate
+      };
+    }
+  }).mount('#app');
+</script>
+</body>
+</html>
+
